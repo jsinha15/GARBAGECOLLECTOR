@@ -1,0 +1,8 @@
+build
+.git
+docs
+tests
+*.md
+*.bat
+*.ps1
+ui/dev

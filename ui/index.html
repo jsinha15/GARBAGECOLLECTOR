@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HeapLens - watch the garbage collector think</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="logo" aria-hidden="true">&#9851;</span> HeapLens <small>watch a garbage collector think</small></div>
+  <div class="top-controls">
+    <label>Collector
+      <select id="algo" disabled title="The active collector. Change it in code with:  use marksweep  (rc, marksweep, compact, copying, generational)">
+        <option value="rc">Reference Counting</option>
+        <option value="marksweep">Mark-Sweep</option>
+        <option value="compact">Mark-Compact</option>
+        <option value="copying">Copying</option>
+        <option value="generational">Generational</option>
+      </select>
+    </label>
+    <label>Heap
+      <select id="heapsize" title="Total managed memory">
+        <option value="1024">1 KB</option>
+        <option value="2048" selected>2 KB</option>
+        <option value="4096">4 KB</option>
+      </select>
+    </label>
+    <button id="b-help" title="Show or hide the quick guide">? Guide</button>
+    <span id="busy" class="busy" hidden role="status"><i class="spin"></i><span id="busy-text">Working&hellip;</span></span>
+    <span id="conn" class="pill">connecting&hellip;</span>
+  </div>
+</header>
+
+<div id="guide" class="guide" hidden>
+  <ol class="steps">
+    <li><b>1</b><span>Pick an <em>example</em> or type code. Each variable is a <em>GC root</em>.</span></li>
+    <li><b>2</b><span>Press <em>Step</em>. One line runs; garbage collections play in slow motion.</span></li>
+    <li><b>3</b><span>Read the <em>orange card</em>: it says what happened and <em>why</em>.</span></li>
+  </ol>
+  <button id="b-guide-x" class="x" title="hide" aria-label="Hide guide">&times;</button>
+</div>
+<div id="banner" class="banner" hidden></div>
+<div id="toasts" class="toasts" aria-live="polite"></div>
+
+<main class="layout">
+  <!-- LEFT: code ------------------------------------------------------------>
+  <aside class="left panel">
+    <div id="pane-code">
+      <select id="example" class="wide-select" title="Ready-made programs, each teaching one idea" aria-label="Example program"><option value="">Choose an example&hellip;</option></select>
+      <div id="lesson" class="lesson dim">Pick an example, then press <b>Step</b>.</div>
+
+      <div class="editor" id="editor">
+        <div class="gutter" id="gutter" aria-hidden="true"></div>
+        <div class="hl" id="hl" hidden></div>
+        <textarea id="code" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off" aria-label="Program code"></textarea>
+      </div>
+      <div id="compile" class="compile ok">&#10003; compiled</div>
+
+      <div id="next" class="next dim">Press <b>Step</b> to run the first line.</div>
+      <div id="done" class="done" hidden>
+        <b>&#10003; Program finished.</b>
+        <span class="dim">Look at the heap, then:</span>
+        <button id="d-again">Run again</button>
+        <button id="d-next" class="primary">Next example &rarr;</button>
+      </div>
+
+      <div class="runbar">
+        <button id="p-step" class="primary big" title="Run the next line (or the next step of a running GC). Shortcut: Ctrl+Enter or N">Step &#9658;</button>
+        <button id="p-play" title="Run the whole program, animating every GC">Play</button>
+        <button id="p-run" title="Run everything instantly and show the end result">Skip to end</button>
+        <button id="p-stop" disabled>Pause</button>
+        <button id="p-reset" class="ghost" title="Empty the heap and go back to line 1">Restart</button>
+      </div>
+
+      <details class="syntax">
+        <summary>Language cheat-sheet</summary>
+<pre>use generational            pick a collector
+a = new Node(next, other)   allocate; a is a variable (root)
+b = new Node                same fields as before
+a.next = b                  store a reference
+c = a.next                  load a reference
+b = null                    drop a variable
+a.next = null               clear a field
+gc()  gc(minor)  gc(major)
+repeat 5 {  ...  }          loop
+// comment</pre>
+      </details>
+    </div>
+
+  </aside>
+
+  <!-- RIGHT: what the runtime is doing ------------------------------------------>
+  <section class="right">
+    <div id="replaybar" class="replaybar" hidden>
+      <i class="spin light" id="rb-spin" hidden></i><strong>GC in slow motion</strong>
+      <span id="stepinfo" class="stepinfo"></span>
+      <span class="spacer"></span>
+      <button id="b-step" title="One logical step (N or right arrow)">Next &#9658;</button>
+      <button id="b-continue">Auto &#9654;&#9654;</button>
+      <button id="b-finish">Skip</button>
+      <button id="b-restart" title="Watch this collection again">Replay</button>
+      <label class="speed">speed <input type="range" id="speed" min="1" max="10" value="5" aria-label="Playback speed"></label>
+      <div class="pbar" aria-hidden="true"><i id="pbar"></i></div>
+    </div>
+
+    <div class="panel explain" id="explain" aria-live="polite">
+      <div id="explain-body" class="dim">Press <b>Step</b> to run the first line of your program.</div>
+    </div>
+
+    <div class="panel progress" id="progress">
+      <div id="narrator" class="narrator">No collection is running.</div>
+      <div id="timeline" class="timeline"></div>
+    </div>
+
+    <div class="panel inspcard" id="inspcard" hidden>
+      <button class="x" id="insp-x" title="Close" aria-label="Close inspector">&times;</button>
+      <div id="inspector"></div>
+    </div>
+
+    <nav class="vtabs" role="tablist" aria-label="Views">
+      <button class="vtab active" data-view="memory" role="tab">Memory</button>
+      <button class="vtab" data-view="graph" role="tab">Graph</button>
+      <button class="vtab" data-view="details" role="tab">Details</button>
+      <button class="vtab" data-view="events" role="tab">Events</button>
+      <button class="vtab" data-view="learn" role="tab">Glossary</button>
+    </nav>
+
+    <div class="view" id="view-memory">
+      <div class="panel">
+        <h2>Variables &amp; objects</h2>
+        <p class="hint">A <b>variable</b> is a GC <em>root</em>. An object is <b>reachable</b> if a variable can get to it by following fields; otherwise it is <b>garbage</b>.</p>
+        <div id="vars"></div>
+      </div>
+      <div class="panel">
+        <h2>Heap <small id="heap-sub" class="dim"></small></h2>
+        <p class="hint">Memory drawn to scale. Hatched = free. Click a box to inspect it.</p>
+        <div id="heap"></div>
+        <div class="legend" id="legend"></div>
+      </div>
+    </div>
+
+    <div class="view" id="view-graph" hidden>
+      <div class="panel">
+        <h2>Object graph</h2>
+        <p class="hint">Dark boxes are variables; arrows are references (number = field slot). Objects below the dashed line cannot be reached.</p>
+        <div id="graph" class="graph"></div>
+      </div>
+    </div>
+
+    <div class="view" id="view-details" hidden>
+      <div class="panel" id="panel-algo">
+        <h2 id="algo-title">Algorithm state</h2>
+        <div id="algo-panel"></div>
+      </div>
+      <div class="panel">
+        <h2>Safepoints <small class="dim">stopping the program for a GC</small></h2>
+        <div id="safepoint" class="safepoint"></div>
+      </div>
+      <div class="panel">
+        <h2>Statistics</h2>
+        <div id="stats"></div>
+      </div>
+    </div>
+
+    <div class="view" id="view-events" hidden>
+      <div class="panel">
+        <h2>Event stream <small class="dim">everything the collector reports; this whole screen is built only from these events</small></h2>
+        <div id="events" class="events"></div>
+      </div>
+    </div>
+
+    <div class="view" id="view-learn" hidden>
+      <div class="panel" id="glossary">
+        <h2>Words used on this page</h2>
+        <dl class="gloss">
+          <dt>Root</dt><dd>A reference that lives outside the heap, here a variable in your code. The collector starts its search from the roots.</dd>
+          <dt>Reachable / garbage</dt><dd>Reachable = a chain of references leads to it from a root. Garbage = no chain exists, so the program can never use it again.</dd>
+          <dt>Mark</dt><dd>Colour reachable objects: white (not seen) &rarr; gray (found, waiting) &rarr; black (fully scanned) &rarr; live.</dd>
+          <dt>Sweep</dt><dd>Walk the heap and free every object that was not marked.</dd>
+          <dt>Compact / forwarding address</dt><dd>Slide live objects together. Each survivor first gets a <em>forwarding address</em>, then all references are rewritten, then objects move.</dd>
+          <dt>Copying (from-space / to-space)</dt><dd>Copy live objects into an empty space and throw the old space away. Survivors end up contiguous.</dd>
+          <dt>Eden, Survivor, Old</dt><dd>New objects start in Eden. Survivors of a minor GC age in the Survivor spaces and are <em>promoted</em> to Old when old enough.</dd>
+          <dt>Write barrier / remembered set / card table</dt><dd>Code run on every reference store that records old&rarr;young pointers, so a minor GC can treat them as extra roots.</dd>
+          <dt>Reference count</dt><dd>Number of references to an object. At 0 it is freed immediately; cycles never reach 0.</dd>
+          <dt>Safepoint / stop-the-world</dt><dd>Threads park at safe places so the collector can work while the program is paused.</dd>
+          <dt>Fragmentation</dt><dd>Free memory split into many small holes; allocation can fail even when enough total space is free.</dd>
+        </dl>
+      </div>
+    </div>
+  </section>
+</main>
+<script src="model.js"></script>
+<script src="script.js"></script>
+<script src="examples.js"></script>
+<script src="app.js"></script>
+<script src="playground.js"></script>
+</body>
+</html>

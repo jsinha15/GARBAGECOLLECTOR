@@ -1,0 +1,7 @@
+# Render "Blueprint": New + > Blueprint > pick this repository.
+services:
+  - type: web
+    name: heaplens
+    runtime: docker
+    plan: free
+    healthCheckPath: /healthz
